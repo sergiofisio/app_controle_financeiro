@@ -3,7 +3,9 @@ import { parseCsvContent } from "@/lib/imports/parse-csv";
 import { parseOfxContent } from "@/lib/imports/parse-ofx";
 import { parsePdfTextContent } from "@/lib/imports/parse-pdf";
 import {
+  buildCategorySuggestionMap,
   buildFingerprint,
+  descriptionMatchKey,
   parseFlexibleAmount,
   parseFlexibleDate,
 } from "@/lib/imports/normalize";
@@ -92,5 +94,82 @@ describe("buildFingerprint", () => {
       bankTxnId: "ABC",
     });
     expect(a).toBe(b);
+  });
+});
+
+describe("descriptionMatchKey", () => {
+  it("gera chave estável para merchant com sufixos diferentes", () => {
+    const a = descriptionMatchKey(
+      "PADARIA E CONFEITARIA SAO BERNARDO LOJA 01",
+    );
+    const b = descriptionMatchKey(
+      "Padaria e Confeitaria Sao Bernardo Centro",
+    );
+    expect(a).toBe("PADARIA CONFEITARIA SAO BERNARDO");
+    expect(a).toBe(b);
+  });
+
+  it("remove prefixos de PIX/TED e mantém beneficiário", () => {
+    expect(descriptionMatchKey("PIX ENVIADO MERCADO LIVRE")).toBe(
+      "MERCADO LIVRE",
+    );
+    expect(descriptionMatchKey("TRANSF ENVIADA PIX LIVANCE SERVICOS")).toBe(
+      "LIVANCE SERVICOS",
+    );
+  });
+
+  it("ignora descrições genéricas sem merchant", () => {
+    expect(descriptionMatchKey("TRANSF ENVIADA PIX")).toBeNull();
+    expect(descriptionMatchKey("PIX ENVIADO")).toBeNull();
+    expect(descriptionMatchKey("PIX")).toBeNull();
+    expect(descriptionMatchKey("   ")).toBeNull();
+  });
+});
+
+describe("buildCategorySuggestionMap", () => {
+  it("escolhe a categoria mais frequente por chave", () => {
+    const map = buildCategorySuggestionMap([
+      {
+        description: "PADARIA E CONFEITARIA SAO BERNARDO",
+        categoryId: "cat-food",
+        type: "EXPENSE",
+      },
+      {
+        description: "PADARIA E CONFEITARIA SAO BERNARDO CENTRO",
+        categoryId: "cat-other",
+        type: "EXPENSE",
+      },
+      {
+        description: "PADARIA E CONFEITARIA SAO BERNARDO LOJA 2",
+        categoryId: "cat-food",
+        type: "EXPENSE",
+      },
+      {
+        description: "TRANSF ENVIADA PIX",
+        categoryId: "cat-transfer",
+        type: "EXPENSE",
+      },
+    ]);
+
+    expect(map.get("PADARIA CONFEITARIA SAO BERNARDO")?.categoryId).toBe(
+      "cat-food",
+    );
+    expect(map.has("TRANSF ENVIADA PIX")).toBe(false);
+  });
+
+  it("em empate usa a ocorrência mais recente", () => {
+    const map = buildCategorySuggestionMap([
+      {
+        description: "LIVANCE SERVICOS DE APOIO ADM",
+        categoryId: "cat-old",
+        type: "EXPENSE",
+      },
+      {
+        description: "LIVANCE SERVICOS DE APOIO ADM LTDA",
+        categoryId: "cat-new",
+        type: "EXPENSE",
+      },
+    ]);
+    expect(map.get("LIVANCE SERVICOS APOIO ADM")?.categoryId).toBe("cat-new");
   });
 });

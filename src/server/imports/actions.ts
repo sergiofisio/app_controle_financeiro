@@ -13,7 +13,9 @@ import {
 } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  buildCategorySuggestionMap,
   buildFingerprint,
+  descriptionMatchKey,
   hashFileContent,
   parseStatementFile,
 } from "@/lib/imports";
@@ -101,7 +103,7 @@ export async function uploadStatementAction(formData: FormData) {
     };
   }
 
-  const [existingTxs, rules] = await Promise.all([
+  const [existingTxs, categorizedHistory, rules] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         householdId,
@@ -113,6 +115,22 @@ export async function uploadStatementAction(formData: FormData) {
         ],
       },
       select: { id: true, fingerprint: true, bankTxnId: true },
+    }),
+    prisma.transaction.findMany({
+      where: {
+        householdId,
+        deletedAt: null,
+        categoryId: { not: null },
+      },
+      select: {
+        description: true,
+        categoryId: true,
+        type: true,
+        movementDate: true,
+        createdAt: true,
+      },
+      orderBy: [{ movementDate: "asc" }, { createdAt: "asc" }],
+      take: 5000,
     }),
     prisma.categorizationRule.findMany({
       where: { householdId, isActive: true },
@@ -127,6 +145,11 @@ export async function uploadStatementAction(formData: FormData) {
       .filter((t) => t.fingerprint)
       .map((t) => [t.fingerprint!, t.id]),
   );
+  const historyByKey = buildCategorySuggestionMap(categorizedHistory);
+  const batchByKey = new Map<
+    string,
+    { categoryId: string; txType: TxType | null }
+  >();
 
   let duplicateCount = 0;
   const rowCreates: Array<{
@@ -173,13 +196,36 @@ export async function uploadStatementAction(formData: FormData) {
     }
 
     const rule = matchCategorizationRule(rules, row.description);
-    const suggestedType = (rule?.txType ||
-      row.suggestedType ||
-      TxType.EXPENSE) as TxType;
+    const matchKey = descriptionMatchKey(row.description);
+    const historyHit = matchKey ? historyByKey.get(matchKey) : undefined;
+    const batchHit = matchKey ? batchByKey.get(matchKey) : undefined;
 
+    let suggestedCategoryId: string | null = null;
     let classificationState: ClassificationState = ClassificationState.UNKNOWN;
-    if (rule?.categoryId) classificationState = ClassificationState.AUTO;
-    else if (row.suggestedType) classificationState = ClassificationState.SUGGESTED;
+    let suggestedType = (row.suggestedType || TxType.EXPENSE) as TxType;
+
+    if (rule?.categoryId) {
+      suggestedCategoryId = rule.categoryId;
+      classificationState = ClassificationState.AUTO;
+      if (rule.txType) suggestedType = rule.txType;
+    } else if (historyHit) {
+      suggestedCategoryId = historyHit.categoryId;
+      classificationState = ClassificationState.SUGGESTED;
+      if (historyHit.txType) suggestedType = historyHit.txType as TxType;
+    } else if (batchHit) {
+      suggestedCategoryId = batchHit.categoryId;
+      classificationState = ClassificationState.SUGGESTED;
+      if (batchHit.txType) suggestedType = batchHit.txType;
+    } else if (row.suggestedType) {
+      classificationState = ClassificationState.SUGGESTED;
+    }
+
+    if (matchKey && suggestedCategoryId) {
+      batchByKey.set(matchKey, {
+        categoryId: suggestedCategoryId,
+        txType: suggestedType,
+      });
+    }
 
     rowCreates.push({
       lineNumber: row.lineNumber,
@@ -191,7 +237,7 @@ export async function uploadStatementAction(formData: FormData) {
       bankTxnId: row.bankTxnId,
       balanceAfter: row.balanceAfter,
       suggestedType,
-      suggestedCategoryId: rule?.categoryId ?? null,
+      suggestedCategoryId,
       classificationState,
       fingerprint,
       duplicateOfTxId,
