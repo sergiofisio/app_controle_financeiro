@@ -51,6 +51,7 @@ export async function parseStatementFile(input: {
   });
 }
 
+export * from "@/lib/imports/description-match";
 export * from "@/lib/imports/normalize";
 export * from "@/lib/imports/detect";
 export * from "@/lib/imports/parse-csv";
