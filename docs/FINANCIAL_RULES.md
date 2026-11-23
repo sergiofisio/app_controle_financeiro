@@ -19,3 +19,12 @@
 - Pagamento de fatura: saída de caixa (`TRANSFER`/`SYSTEM`) ligada à fatura; **não** é despesa operacional.
 - Exclusão de lançamento é lógica (`deletedAt` + `CANCELLED`).
 - Categorias padrão são seedadas por família na criação / primeiro uso.
+
+## Fase 3 — importação
+
+- Upload gera lote em `PREVIEW`; lançamentos só nascem após confirmação.
+- Antiduplicação: `bankTxnId` (FITID/documento) primeiro; senão fingerprint SHA-256 (conta+data+valor+descrição).
+- PDF escaneado (sem texto) não inventa linhas — apenas aviso para usar CSV/OFX.
+- Confirmação é transacional; desfazer marca lançamentos com `deletedAt` + `CANCELLED` e lote `REVERTED`.
+- Categoria confirmada pelo usuário pode gerar `CategorizationRule` por padrão textual.
+- Conciliação registra `statedBalance` na conta e compara com saldo calculado; diferenças não são ajustadas automaticamente.

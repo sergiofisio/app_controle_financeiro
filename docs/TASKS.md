@@ -31,7 +31,14 @@ Estado: **Concluída**
 
 ## Fase 3 — Importação de extratos
 
-Estado: **Pendente**
+Estado: **Concluída**
+
+- [x] Schema ImportBatch/Row/Mapping + CategorizationRule + campos de conciliação
+- [x] Parsers CSV/OFX/PDF textual + normalização + testes Vitest
+- [x] Antiduplicação (FITID/fingerprint), regras de categoria e confirmação transacional
+- [x] UI `/importar`: upload, mapeamento CSV, prévia editável, histórico e desfazer
+- [x] Conciliação básica (saldo informado vs calculado)
+- [x] Migration `phase3_imports`
 
 ## Fase 4 — Dashboard e relatórios
 
