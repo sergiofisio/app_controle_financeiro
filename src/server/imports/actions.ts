@@ -386,81 +386,124 @@ export async function confirmImportBatchAction(batchId: string) {
       (r.userDescription || r.description),
   );
 
-  await prisma.$transaction(async (tx) => {
-    let imported = 0;
-    for (const row of toImport) {
-      const type = (row.userType || row.suggestedType || TxType.EXPENSE) as TxType;
-      const description =
-        row.userDescription || row.description || "Importado";
-      const categoryId = row.userCategoryId || row.suggestedCategoryId;
+  const CHUNK = 200;
+  const txCreates = toImport.map((row) => {
+    const type = (row.userType || row.suggestedType || TxType.EXPENSE) as TxType;
+    const description =
+      row.userDescription || row.description || "Importado";
+    const categoryId = row.userCategoryId || row.suggestedCategoryId;
+    return {
+      householdId,
+      type,
+      amount: row.amount!,
+      description,
+      categoryId,
+      accountId: batch.accountId,
+      holderKind: "HOUSEHOLD" as const,
+      movementDate: row.movementDate!,
+      competenceDate: row.movementDate!,
+      status: TxStatus.CLEARED,
+      origin: TxOrigin.IMPORT,
+      fingerprint: row.fingerprint,
+      bankTxnId: row.bankTxnId,
+      importBatchId: batch.id,
+      createdById: userId,
+      updatedById: userId,
+    };
+  });
 
-      await tx.transaction.create({
-        data: {
-          householdId,
-          type,
-          amount: row.amount!,
-          description,
-          categoryId,
-          accountId: batch.accountId,
-          holderKind: "HOUSEHOLD",
-          movementDate: row.movementDate!,
-          competenceDate: row.movementDate!,
-          status: TxStatus.CLEARED,
-          origin: TxOrigin.IMPORT,
-          fingerprint: row.fingerprint,
-          bankTxnId: row.bankTxnId,
-          importBatchId: batch.id,
-          createdById: userId,
-          updatedById: userId,
-        },
+  const ruleCandidates = new Map<
+    string,
+    { pattern: string; categoryId: string; txType: TxType }
+  >();
+  for (const row of toImport) {
+    const categoryId = row.userCategoryId || row.suggestedCategoryId;
+    const description =
+      row.userDescription || row.description || "Importado";
+    if (
+      !categoryId ||
+      row.classificationState !== ClassificationState.CONFIRMED
+    ) {
+      continue;
+    }
+    const pattern = description.split(/\s+/).slice(0, 3).join(" ");
+    if (pattern.length < 3) continue;
+    const key = pattern.toUpperCase();
+    if (!ruleCandidates.has(key)) {
+      ruleCandidates.set(key, {
+        pattern,
+        categoryId,
+        txType: (row.userType || row.suggestedType || TxType.EXPENSE) as TxType,
       });
+    }
+  }
 
-      await tx.importRow.update({
-        where: { id: row.id },
-        data: { status: ImportRowStatus.IMPORTED },
-      });
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        for (let i = 0; i < txCreates.length; i += CHUNK) {
+          await tx.transaction.createMany({
+            data: txCreates.slice(i, i + CHUNK),
+          });
+        }
 
-      if (
-        categoryId &&
-        description &&
-        row.classificationState === ClassificationState.CONFIRMED
-      ) {
-        const pattern = description.split(/\s+/).slice(0, 3).join(" ");
-        if (pattern.length >= 3) {
-          const exists = await tx.categorizationRule.findFirst({
+        if (toImport.length > 0) {
+          await tx.importRow.updateMany({
+            where: { id: { in: toImport.map((r) => r.id) } },
+            data: { status: ImportRowStatus.IMPORTED },
+          });
+        }
+
+        if (ruleCandidates.size > 0) {
+          const existing = await tx.categorizationRule.findMany({
             where: {
               householdId,
-              pattern: { equals: pattern, mode: "insensitive" },
-            },
-          });
-          if (!exists) {
-            await tx.categorizationRule.create({
-              data: {
-                householdId,
-                pattern,
-                categoryId,
-                txType: type,
-                priority: 50,
+              pattern: {
+                in: [...ruleCandidates.values()].map((r) => r.pattern),
+                mode: "insensitive",
               },
+            },
+            select: { pattern: true },
+          });
+          const existingKeys = new Set(
+            existing.map((r) => r.pattern.toUpperCase()),
+          );
+          const toCreate = [...ruleCandidates.values()].filter(
+            (r) => !existingKeys.has(r.pattern.toUpperCase()),
+          );
+          if (toCreate.length > 0) {
+            await tx.categorizationRule.createMany({
+              data: toCreate.map((r) => ({
+                householdId,
+                pattern: r.pattern,
+                categoryId: r.categoryId,
+                txType: r.txType,
+                priority: 50,
+              })),
             });
           }
         }
-      }
 
-      imported += 1;
-    }
-
-    const skipped = batch.rows.filter((r) => !r.include).length;
-    await tx.importBatch.update({
-      where: { id: batch.id },
-      data: {
-        status: ImportBatchStatus.CONFIRMED,
-        confirmedAt: new Date(),
-        importedCount: imported,
-        rejectedCount: skipped,
+        const skipped = batch.rows.filter((r) => !r.include).length;
+        await tx.importBatch.update({
+          where: { id: batch.id },
+          data: {
+            status: ImportBatchStatus.CONFIRMED,
+            confirmedAt: new Date(),
+            importedCount: toImport.length,
+            rejectedCount: skipped,
+          },
+        });
       },
-    });
-  });
+      { timeout: 60_000, maxWait: 10_000 },
+    );
+  } catch (error) {
+    console.error("confirmImportBatchAction failed", error);
+    return {
+      error:
+        "Não foi possível confirmar a importação. Tente novamente em instantes.",
+    };
+  }
 
   revalidateImports(batchId);
   return { ok: true };

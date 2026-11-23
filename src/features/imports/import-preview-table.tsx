@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
   confirmImportBatchAction,
@@ -28,7 +28,7 @@ type Row = {
   lineNumber: number;
   movementDate: Date | string | null;
   description: string | null;
-  amount: { toString(): string } | null;
+  amount: string | null;
   suggestedType: string | null;
   userType: string | null;
   userDescription: string | null;
@@ -44,6 +44,17 @@ function rowText(row: Pick<Row, "userDescription" | "description">) {
   return row.userDescription || row.description;
 }
 
+function hasCategory(row: Row) {
+  return Boolean(row.userCategoryId || row.suggestedCategoryId);
+}
+
+type DescriptionGroup = {
+  key: string;
+  label: string;
+  total: number;
+  withoutCategory: number;
+};
+
 export function ImportPreviewTable({
   batchId,
   status,
@@ -58,14 +69,148 @@ export function ImportPreviewTable({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [draftRows, setDraftRows] = useState(rows);
+  const [filterKey, setFilterKey] = useState<string | null>(null);
+  const [onlyWithoutCategory, setOnlyWithoutCategory] = useState(false);
   const editable = status === "PREVIEW";
 
   useEffect(() => {
     setDraftRows(rows);
   }, [rows]);
 
+  const activeRows = useMemo(
+    () =>
+      draftRows.filter(
+        (r) => r.include && r.status !== "DUPLICATE",
+      ),
+    [draftRows],
+  );
+
+  const withoutCategoryCount = useMemo(
+    () => activeRows.filter((r) => !hasCategory(r)).length,
+    [activeRows],
+  );
+
+  const descriptionGroups = useMemo(() => {
+    const map = new Map<string, DescriptionGroup>();
+    for (const row of activeRows) {
+      const text = rowText(row) || "(sem descrição)";
+      const key = batchDescriptionMatchKey(text) || text.toUpperCase();
+      const current = map.get(key);
+      if (current) {
+        current.total += 1;
+        if (!hasCategory(row)) current.withoutCategory += 1;
+      } else {
+        map.set(key, {
+          key,
+          label: text,
+          total: 1,
+          withoutCategory: hasCategory(row) ? 0 : 1,
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => {
+      if (b.withoutCategory !== a.withoutCategory) {
+        return b.withoutCategory - a.withoutCategory;
+      }
+      return b.total - a.total;
+    });
+  }, [activeRows]);
+
+  const visibleRows = useMemo(() => {
+    return draftRows.filter((row) => {
+      if (onlyWithoutCategory && hasCategory(row)) return false;
+      if (!filterKey) return true;
+      const text = rowText(row) || "(sem descrição)";
+      const key = batchDescriptionMatchKey(text) || text.toUpperCase();
+      return key === filterKey;
+    });
+  }, [draftRows, filterKey, onlyWithoutCategory]);
+
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium">Progresso da categorização</p>
+            <p className="text-xs text-muted-foreground">
+              {activeRows.length} linha(s) a importar ·{" "}
+              {descriptionGroups.length} descrição(ões) distintas
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant={withoutCategoryCount > 0 ? "destructive" : "secondary"}
+              className="tabular-nums"
+            >
+              {withoutCategoryCount} sem categoria
+            </Badge>
+            <Button
+              type="button"
+              size="sm"
+              variant={onlyWithoutCategory ? "default" : "outline"}
+              onClick={() => setOnlyWithoutCategory((v) => !v)}
+            >
+              {onlyWithoutCategory ? "Ver todas" : "Só sem categoria"}
+            </Button>
+            {filterKey ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setFilterKey(null)}
+              >
+                Limpar filtro
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="max-h-56 overflow-y-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Descrição</TableHead>
+                <TableHead className="text-right w-20">Qtd</TableHead>
+                <TableHead className="text-right w-28">Sem categoria</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {descriptionGroups.map((group) => (
+                <TableRow
+                  key={group.key}
+                  className={
+                    filterKey === group.key
+                      ? "bg-muted/50 cursor-pointer"
+                      : "cursor-pointer hover:bg-muted/30"
+                  }
+                  onClick={() =>
+                    setFilterKey((prev) =>
+                      prev === group.key ? null : group.key,
+                    )
+                  }
+                >
+                  <TableCell className="max-w-[420px] truncate text-sm">
+                    {group.label}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {group.total}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {group.withoutCategory > 0 ? (
+                      <span className="text-amber-700 dark:text-amber-300">
+                        {group.withoutCategory}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">0</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+
       <div className="overflow-x-auto rounded-xl border">
         <Table>
           <TableHeader>
@@ -80,7 +225,7 @@ export function ImportPreviewTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {draftRows.map((row) => (
+            {visibleRows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>
                   {editable ? (
@@ -282,9 +427,7 @@ export function ImportPreviewTable({
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {row.amount
-                    ? formatMoney(decimalToNumber(row.amount.toString()))
-                    : "—"}
+                  {row.amount ? formatMoney(decimalToNumber(row.amount)) : "—"}
                 </TableCell>
                 <TableCell>
                   <Badge variant="secondary">{row.status}</Badge>
@@ -308,7 +451,7 @@ export function ImportPreviewTable({
                 if (r?.error) toast.error(r.error);
                 else {
                   toast.success("Importação confirmada.");
-                  router.refresh();
+                  router.push("/importar");
                 }
               })
             }

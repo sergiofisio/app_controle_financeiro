@@ -64,7 +64,22 @@ export default async function ImportBatchPage({
       <ImportPreviewTable
         batchId={batch.id}
         status={batch.status}
-        rows={batch.rows as never}
+        rows={batch.rows.map((row) => ({
+          id: row.id,
+          lineNumber: row.lineNumber,
+          movementDate: row.movementDate,
+          description: row.description,
+          amount: row.amount?.toString() ?? null,
+          suggestedType: row.suggestedType,
+          userType: row.userType,
+          userDescription: row.userDescription,
+          suggestedCategoryId: row.suggestedCategoryId,
+          userCategoryId: row.userCategoryId,
+          status: row.status,
+          include: row.include,
+          classificationState: row.classificationState,
+          reviewNote: row.reviewNote,
+        }))}
         categories={categories.map((c) => ({
           id: c.id,
           name: c.name,
