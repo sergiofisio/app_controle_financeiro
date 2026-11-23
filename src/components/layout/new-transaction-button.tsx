@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,56 +11,23 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { TransactionForm } from "@/features/transactions/transaction-form";
-import { listActiveAccounts } from "@/server/accounts/queries";
-import {
-  listCategories,
-  listHouseholdMembersForSelect,
-} from "@/server/transactions/queries";
+
+export type QuickFormData = {
+  accounts: Array<{ id: string; name: string }>;
+  categories: Array<{ id: string; name: string; kind: "INCOME" | "EXPENSE" }>;
+  members: Array<{ user: { id: string; name: string } }>;
+};
 
 export function NewTransactionButton({
   className,
   compact = false,
+  formData,
 }: {
   className?: string;
   compact?: boolean;
+  formData: QuickFormData;
 }) {
   const [open, setOpen] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [accounts, setAccounts] = useState<Array<{ id: string; name: string }>>(
-    [],
-  );
-  const [categories, setCategories] = useState<
-    Array<{ id: string; name: string; kind: "INCOME" | "EXPENSE" }>
-  >([]);
-  const [members, setMembers] = useState<
-    Array<{ user: { id: string; name: string } }>
-  >([]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    (async () => {
-      const [a, c, m] = await Promise.all([
-        listActiveAccounts(),
-        listCategories(),
-        listHouseholdMembersForSelect(),
-      ]);
-      if (cancelled) return;
-      setAccounts(a.map((x) => ({ id: x.id, name: x.name })));
-      setCategories(
-        c.map((x) => ({
-          id: x.id,
-          name: x.name,
-          kind: x.kind as "INCOME" | "EXPENSE",
-        })),
-      );
-      setMembers(m);
-      setReady(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -76,16 +43,12 @@ export function NewTransactionButton({
         <DialogHeader>
           <DialogTitle>Novo lançamento</DialogTitle>
         </DialogHeader>
-        {ready ? (
-          <TransactionForm
-            accounts={accounts}
-            categories={categories}
-            members={members}
-            onSuccess={() => setOpen(false)}
-          />
-        ) : (
-          <p className="text-sm text-muted-foreground">Carregando...</p>
-        )}
+        <TransactionForm
+          accounts={formData.accounts}
+          categories={formData.categories}
+          members={formData.members}
+          onSuccess={() => setOpen(false)}
+        />
       </DialogContent>
     </Dialog>
   );

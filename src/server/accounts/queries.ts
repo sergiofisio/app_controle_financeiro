@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { calculateBalance } from "@/lib/money";
 import { requireHouseholdContext } from "@/server/household-authz";
-import type { TxType } from "@/generated/prisma/client";
+import type { TxType } from "@/lib/money/tx-types";
 
 export async function listAccountsWithBalances() {
   const { householdId } = await requireHouseholdContext();

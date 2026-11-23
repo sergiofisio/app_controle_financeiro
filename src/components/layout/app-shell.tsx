@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { MobileNav } from "@/components/layout/mobile-nav";
-import { NewTransactionButton } from "@/components/layout/new-transaction-button";
+import {
+  NewTransactionButton,
+  type QuickFormData,
+} from "@/components/layout/new-transaction-button";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -9,10 +12,12 @@ export function AppShell({
   children,
   user,
   householdName,
+  quickForm,
 }: {
   children: React.ReactNode;
   user: { name: string; email: string };
   householdName: string;
+  quickForm: QuickFormData;
 }) {
   return (
     <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-sky-50 via-background to-background dark:from-slate-900/40 dark:via-background dark:to-background">
@@ -32,7 +37,7 @@ export function AppShell({
             <SidebarNav />
           </div>
           <div className="border-t border-sidebar-border p-3">
-            <NewTransactionButton className="w-full" />
+            <NewTransactionButton className="w-full" formData={quickForm} />
           </div>
         </aside>
 
@@ -49,7 +54,7 @@ export function AppShell({
             </div>
             <div className="ml-auto flex items-center gap-1 sm:gap-2">
               <div className="hidden sm:block lg:hidden">
-                <NewTransactionButton compact />
+                <NewTransactionButton compact formData={quickForm} />
               </div>
               <ThemeToggle />
               <UserMenu name={user.name} email={user.email} />

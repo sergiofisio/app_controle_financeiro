@@ -1,17 +1,17 @@
-import { Prisma } from "@/generated/prisma/client";
-import type { TxType } from "@/generated/prisma/client";
+import Decimal from "decimal.js";
+import type { TxType } from "@/lib/money/tx-types";
 
-export type Decimal = Prisma.Decimal;
-export type DecimalLike = Decimal | string | number;
-
-const DecimalCtor = Prisma.Decimal;
+export type { TxType } from "@/lib/money/tx-types";
+export type DecimalLike = Decimal.Value;
+export type MoneyDecimal = Decimal.Instance;
+export { Decimal };
 
 /** Arredonda para 2 casas (BRL) com HALF_UP. */
-export function roundBRL(value: DecimalLike): Decimal {
-  return new DecimalCtor(value).toDecimalPlaces(2, DecimalCtor.ROUND_HALF_UP);
+export function roundBRL(value: DecimalLike): MoneyDecimal {
+  return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
 
-export function toDecimal(value: DecimalLike): Decimal {
+export function toDecimal(value: DecimalLike): MoneyDecimal {
   return roundBRL(value);
 }
 
@@ -19,15 +19,15 @@ export function decimalToNumber(value: DecimalLike): number {
   return roundBRL(value).toNumber();
 }
 
-export function addMoney(...values: DecimalLike[]): Decimal {
-  let acc = new DecimalCtor(0);
+export function addMoney(...values: DecimalLike[]): MoneyDecimal {
+  let acc = new Decimal(0);
   for (const v of values) {
     acc = acc.plus(toDecimal(v));
   }
   return roundBRL(acc);
 }
 
-export function subMoney(a: DecimalLike, b: DecimalLike): Decimal {
+export function subMoney(a: DecimalLike, b: DecimalLike): MoneyDecimal {
   return roundBRL(toDecimal(a).minus(toDecimal(b)));
 }
 
@@ -39,7 +39,7 @@ export function cashEffect(
   type: TxType,
   amount: DecimalLike,
   options?: { transferDirection?: "OUT" | "IN" },
-): Decimal {
+): MoneyDecimal {
   const value = toDecimal(amount);
   switch (type) {
     case "INCOME":
@@ -55,7 +55,7 @@ export function cashEffect(
     case "ADJUSTMENT":
       return value;
     default:
-      return new DecimalCtor(0);
+      return new Decimal(0);
   }
 }
 
@@ -78,7 +78,7 @@ export function calculateBalance(
     amount: DecimalLike;
     transferDirection?: "OUT" | "IN";
   }>,
-): Decimal {
+): MoneyDecimal {
   let balance = toDecimal(initialBalance);
   for (const m of movements) {
     balance = balance.plus(
@@ -91,11 +91,14 @@ export function calculateBalance(
 }
 
 /** Divide valor em N parcelas BRL sem perder centavos. */
-export function splitInstallments(total: DecimalLike, parts: number): Decimal[] {
+export function splitInstallments(
+  total: DecimalLike,
+  parts: number,
+): MoneyDecimal[] {
   if (parts < 1) throw new Error("Parcelas inválidas");
   const totalDec = toDecimal(total);
-  const base = totalDec.div(parts).toDecimalPlaces(2, DecimalCtor.ROUND_DOWN);
-  const result: Decimal[] = Array.from({ length: parts }, () => base);
+  const base = totalDec.div(parts).toDecimalPlaces(2, Decimal.ROUND_DOWN);
+  const result: MoneyDecimal[] = Array.from({ length: parts }, () => base);
   let remainder = totalDec.minus(base.mul(parts));
   let i = 0;
   while (remainder.greaterThan(0)) {
@@ -106,7 +109,7 @@ export function splitInstallments(total: DecimalLike, parts: number): Decimal[] 
   return result.map(roundBRL);
 }
 
-export function parseBRLInput(raw: string): Decimal {
+export function parseBRLInput(raw: string): MoneyDecimal {
   const cleaned = raw
     .trim()
     .replace(/\s/g, "")
