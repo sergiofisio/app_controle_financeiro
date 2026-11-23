@@ -11,10 +11,17 @@ import {
 } from "@/server/imports/actions";
 import { batchDescriptionMatchKey } from "@/lib/imports/description-match";
 import { formatDate, formatMoney } from "@/lib/format";
-import { decimalToNumber } from "@/lib/money";
+import {
+  cashEffect,
+  decimalToNumber,
+  subMoney,
+  toDecimal,
+  type TxType,
+} from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -30,6 +37,7 @@ type Row = {
   movementDate: Date | string | null;
   description: string | null;
   amount: string | null;
+  signedAmount: string | null;
   suggestedType: string | null;
   userType: string | null;
   userDescription: string | null;
@@ -40,6 +48,28 @@ type Row = {
   classificationState: string;
   reviewNote: string | null;
 };
+
+function formatBRLInput(value: number | string | null | undefined): string {
+  if (value == null || value === "") return "";
+  const n = typeof value === "number" ? value : Number(value);
+  if (Number.isNaN(n)) return String(value);
+  return n.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function resolvePreviewType(row: Row): TxType {
+  let type = (row.userType || row.suggestedType || "EXPENSE") as TxType;
+  if (type === "ADJUSTMENT") {
+    if (row.signedAmount) {
+      type = toDecimal(row.signedAmount).isNegative() ? "EXPENSE" : "INCOME";
+    } else {
+      type = "INCOME";
+    }
+  }
+  return type;
+}
 
 function rowText(row: Pick<Row, "userDescription" | "description">) {
   return row.userDescription || row.description;
@@ -63,22 +93,39 @@ export function ImportPreviewTable({
   status,
   rows,
   categories,
+  statementBalance: initialStatementBalance,
+  statementBalanceAt: initialStatementBalanceAt,
+  currentAccountBalance,
 }: {
   batchId: string;
   status: string;
   rows: Row[];
   categories: Array<{ id: string; name: string; kind: string }>;
+  statementBalance?: string | null;
+  statementBalanceAt?: string | null;
+  currentAccountBalance: number;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [draftRows, setDraftRows] = useState(rows);
   const [filterKey, setFilterKey] = useState<string | null>(null);
   const [onlyWithoutCategory, setOnlyWithoutCategory] = useState(false);
+  const [statementBalance, setStatementBalance] = useState(
+    formatBRLInput(initialStatementBalance),
+  );
+  const [statementBalanceAt, setStatementBalanceAt] = useState(
+    initialStatementBalanceAt?.slice(0, 10) ?? "",
+  );
   const editable = status === "PREVIEW";
 
   useEffect(() => {
     setDraftRows(rows);
   }, [rows]);
+
+  useEffect(() => {
+    setStatementBalance(formatBRLInput(initialStatementBalance));
+    setStatementBalanceAt(initialStatementBalanceAt?.slice(0, 10) ?? "");
+  }, [initialStatementBalance, initialStatementBalanceAt]);
 
   const activeRows = useMemo(
     () =>
@@ -92,6 +139,41 @@ export function ImportPreviewTable({
     () => activeRows.filter((r) => !hasCategory(r)).length,
     [activeRows],
   );
+
+  const balancePreview = useMemo(() => {
+    let batchEffect = toDecimal(0);
+    for (const row of activeRows) {
+      if (!row.amount) continue;
+      batchEffect = batchEffect.plus(
+        cashEffect(resolvePreviewType(row), row.amount),
+      );
+    }
+    const projected = toDecimal(currentAccountBalance).plus(batchEffect);
+    let statement: ReturnType<typeof toDecimal> | null = null;
+    try {
+      if (statementBalance.trim()) {
+        const cleaned = statementBalance
+          .trim()
+          .replace(/\s/g, "")
+          .replace(/R\$\s?/i, "")
+          .replace(/\./g, "")
+          .replace(",", ".");
+        if (cleaned && !Number.isNaN(Number(cleaned))) {
+          statement = toDecimal(cleaned);
+        }
+      }
+    } catch {
+      statement = null;
+    }
+    const difference =
+      statement != null ? subMoney(statement, projected) : null;
+    return {
+      batchEffect: decimalToNumber(batchEffect),
+      projected: decimalToNumber(projected),
+      statement: statement ? decimalToNumber(statement) : null,
+      difference: difference ? decimalToNumber(difference) : null,
+    };
+  }, [activeRows, currentAccountBalance, statementBalance]);
 
   const descriptionGroups = useMemo(() => {
     const map = new Map<
@@ -555,16 +637,89 @@ export function ImportPreviewTable({
         </Table>
       </div>
 
+      {editable ? (
+        <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+          <p className="text-sm font-medium">Saldo do extrato</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="preview-statement-balance">
+                Saldo atual no extrato
+              </Label>
+              <Input
+                id="preview-statement-balance"
+                value={statementBalance}
+                onChange={(e) => setStatementBalance(e.target.value)}
+                placeholder="220,50"
+                inputMode="decimal"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="preview-statement-at">Data do saldo</Label>
+              <Input
+                id="preview-statement-at"
+                type="date"
+                value={statementBalanceAt}
+                onChange={(e) => setStatementBalanceAt(e.target.value)}
+              />
+            </div>
+          </div>
+          <dl className="grid gap-1 text-sm sm:grid-cols-2">
+            <div className="flex justify-between gap-2 sm:block">
+              <dt className="text-muted-foreground">Saldo atual da conta</dt>
+              <dd className="tabular-nums font-medium">
+                {formatMoney(currentAccountBalance)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2 sm:block">
+              <dt className="text-muted-foreground">Efeito líquido do lote</dt>
+              <dd className="tabular-nums font-medium">
+                {formatMoney(balancePreview.batchEffect)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2 sm:block">
+              <dt className="text-muted-foreground">
+                Saldo calculado (abertura atual + lote)
+              </dt>
+              <dd className="tabular-nums font-medium">
+                {formatMoney(balancePreview.projected)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2 sm:block">
+              <dt className="text-muted-foreground">Diferença vs extrato</dt>
+              <dd className="tabular-nums font-medium">
+                {balancePreview.difference != null
+                  ? formatMoney(balancePreview.difference)
+                  : "—"}
+              </dd>
+            </div>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            Na confirmação, o saldo inicial da conta é recalculado para que o
+            saldo final bata com o extrato
+            {balancePreview.statement != null
+              ? ` (${formatMoney(balancePreview.statement)})`
+              : ""}
+            .
+          </p>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap gap-2">
         {editable ? (
           <Button
-            disabled={pending}
+            disabled={pending || !statementBalance.trim()}
             onClick={() =>
               startTransition(async () => {
-                const r = await confirmImportBatchAction(batchId);
+                const fd = new FormData();
+                fd.set("batchId", batchId);
+                fd.set("statementBalance", statementBalance.trim());
+                if (statementBalanceAt) {
+                  fd.set("statementBalanceAt", statementBalanceAt);
+                }
+                const r = await confirmImportBatchAction(fd);
                 if (r?.error) toast.error(r.error);
                 else {
-                  toast.success("Importação confirmada.");
+                  toast.success("Importação confirmada. Saldo alinhado ao extrato.");
                   router.push("/importar");
                 }
               })

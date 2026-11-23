@@ -30,6 +30,22 @@ export function parsePdfTextContent(text: string): ParseResult {
   const rowRegex =
     /^(\d{2}[\/\-]\d{2}[\/\-]\d{2,4})\s+(.+?)\s+(-?\(?R\$\s*)?(-?\d{1,3}(?:\.\d{3})*,\d{2}|\d+[.,]\d{2})\)?\s*$/i;
 
+  let statementBalance: string | null = null;
+  let statementBalanceAt: string | null = null;
+  const exportBalanceRe =
+    /Saldo\s+no\s+dia\s+da\s+exporta[cç][aã]o[^R$]*R\$\s*(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+[.,]\d{2})/i;
+  const exportMatch = cleaned.match(exportBalanceRe);
+  if (exportMatch?.[1]) {
+    const parsedBal = parseFlexibleAmount(exportMatch[1]);
+    if (parsedBal) statementBalance = parsedBal.signed;
+  }
+  const exportDateRe =
+    /exporta[cç][aã]o[^\d]*(\d{2}[\/\-]\d{2}[\/\-]\d{2,4})/i;
+  const exportDateMatch = cleaned.match(exportDateRe);
+  if (exportDateMatch?.[1]) {
+    statementBalanceAt = parseFlexibleDate(exportDateMatch[1]);
+  }
+
   const rows: NormalizedImportRow[] = [];
   let lineNumber = 0;
 
@@ -64,6 +80,8 @@ export function parsePdfTextContent(text: string): ParseResult {
   return {
     format: "PDF",
     rows,
+    statementBalance,
+    statementBalanceAt,
     warningMessage:
       rows.length === 0
         ? "Não foi possível identificar linhas financeiras confiáveis no PDF. Revise o arquivo ou use CSV/OFX."

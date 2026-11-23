@@ -9,7 +9,11 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime } from "@/lib/format";
-import { getImportBatch } from "@/server/imports/queries";
+import { decimalToNumber } from "@/lib/money";
+import {
+  getAccountReconciliation,
+  getImportBatch,
+} from "@/server/imports/queries";
 import { listCategories } from "@/server/transactions/queries";
 
 export default async function ImportBatchPage({
@@ -23,6 +27,8 @@ export default async function ImportBatchPage({
     listCategories(),
   ]);
   if (!batch) notFound();
+
+  const reconciliation = await getAccountReconciliation(batch.accountId);
 
   return (
     <div className="space-y-6">
@@ -64,12 +70,24 @@ export default async function ImportBatchPage({
       <ImportPreviewTable
         batchId={batch.id}
         status={batch.status}
+        statementBalance={batch.statementBalance?.toString() ?? null}
+        statementBalanceAt={
+          batch.statementBalanceAt
+            ? batch.statementBalanceAt.toISOString().slice(0, 10)
+            : null
+        }
+        currentAccountBalance={
+          reconciliation
+            ? decimalToNumber(reconciliation.calculatedBalance)
+            : decimalToNumber(batch.account.initialBalance)
+        }
         rows={batch.rows.map((row) => ({
           id: row.id,
           lineNumber: row.lineNumber,
           movementDate: row.movementDate,
           description: row.description,
           amount: row.amount?.toString() ?? null,
+          signedAmount: row.signedAmount?.toString() ?? null,
           suggestedType: row.suggestedType,
           userType: row.userType,
           userDescription: row.userDescription,

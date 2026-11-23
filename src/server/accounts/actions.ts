@@ -2,7 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { AccountType, HolderKind } from "@/generated/prisma/client";
+import {
+  AccountType,
+  HolderKind,
+  ImportBatchStatus,
+  ImportRowStatus,
+  TxStatus,
+} from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseBRLInput } from "@/lib/money";
 import { requireHouseholdContext } from "@/server/household-authz";
@@ -121,5 +127,79 @@ export async function softDeleteAccountAction(id: string) {
     data: { deletedAt: new Date(), isActive: false },
   });
   revalidatePath("/contas");
+  return { ok: true };
+}
+
+/** Limpa lançamentos e importações da conta; zera saldos. Mantém o cadastro. */
+export async function resetFinancialAccountAction(accountId: string) {
+  const { householdId, userId } = await requireHouseholdContext();
+  const account = await prisma.financialAccount.findFirst({
+    where: { id: accountId, householdId, deletedAt: null },
+  });
+  if (!account) return { error: "Conta não encontrada" };
+
+  const now = new Date();
+
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.transaction.updateMany({
+        where: {
+          householdId,
+          accountId,
+          deletedAt: null,
+        },
+        data: {
+          deletedAt: now,
+          status: TxStatus.CANCELLED,
+          updatedById: userId,
+        },
+      });
+
+      await tx.importBatch.updateMany({
+        where: {
+          householdId,
+          accountId,
+          status: { not: ImportBatchStatus.REVERTED },
+        },
+        data: {
+          status: ImportBatchStatus.REVERTED,
+          revertedAt: now,
+        },
+      });
+
+      await tx.importRow.updateMany({
+        where: {
+          batch: { householdId, accountId },
+          status: {
+            in: [
+              ImportRowStatus.IMPORTED,
+              ImportRowStatus.READY,
+              ImportRowStatus.PENDING,
+              ImportRowStatus.NEEDS_REVIEW,
+              ImportRowStatus.DUPLICATE,
+            ],
+          },
+        },
+        data: { status: ImportRowStatus.SKIPPED },
+      });
+
+      await tx.financialAccount.update({
+        where: { id: accountId },
+        data: {
+          initialBalance: 0,
+          initialBalanceDate: now,
+          statedBalance: null,
+          statedBalanceAt: null,
+          lastReconciledAt: null,
+        },
+      });
+    },
+    { timeout: 60_000 },
+  );
+
+  revalidatePath("/contas");
+  revalidatePath("/lancamentos");
+  revalidatePath("/importar");
+  revalidatePath("/");
   return { ok: true };
 }

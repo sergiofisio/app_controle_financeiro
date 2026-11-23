@@ -28,4 +28,7 @@ export type ParseResult = {
   warningMessage?: string;
   detectedDelimiter?: string;
   detectedHeaders?: string[];
+  /** Saldo do extrato no dia da exportação / LEDGERBAL, se disponível. */
+  statementBalance?: string | null;
+  statementBalanceAt?: string | null; // yyyy-MM-dd
 };

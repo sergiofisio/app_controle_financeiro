@@ -1,5 +1,6 @@
 import { Wallet } from "lucide-react";
 import { AccountForm } from "@/features/accounts/account-form";
+import { ResetAccountButton } from "@/features/accounts/reset-account-button";
 import { EmptyState } from "@/components/empty-state";
 import {
   Card,
@@ -69,14 +70,21 @@ export default async function ContasPage() {
                   {accountTypeLabels[account.type]}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-1 text-sm">
-                <p className="text-2xl font-semibold tabular-nums">
-                  {formatMoney(decimalToNumber(account.balance))}
-                </p>
-                <p className="text-muted-foreground">
-                  Inicial {formatMoney(decimalToNumber(account.initialBalance))}{" "}
-                  em {formatDate(account.initialBalanceDate)}
-                </p>
+              <CardContent className="space-y-3 text-sm">
+                <div className="space-y-1">
+                  <p className="text-2xl font-semibold tabular-nums">
+                    {formatMoney(decimalToNumber(account.balance))}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Inicial{" "}
+                    {formatMoney(decimalToNumber(account.initialBalance))} em{" "}
+                    {formatDate(account.initialBalanceDate)}
+                  </p>
+                </div>
+                <ResetAccountButton
+                  accountId={account.id}
+                  accountName={account.name}
+                />
               </CardContent>
             </Card>
           ))}

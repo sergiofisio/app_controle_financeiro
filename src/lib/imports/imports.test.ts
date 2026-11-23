@@ -60,6 +60,33 @@ OFXHEADER:100
     expect(result.rows[0]?.amount).toBe("45.90");
     expect(result.rows[0]?.signedAmount).toBe("-45.90");
   });
+
+  it("lê LEDGERBAL/BALAMT quando existir", () => {
+    const ofx = `
+OFXHEADER:100
+<OFX>
+<BANKMSGSRSV1>
+<STMTRS>
+<LEDGERBAL>
+<BALAMT>220.50
+<DTASOF>20261123
+</LEDGERBAL>
+<BANKTRANLIST>
+<STMTTRN>
+<TRNTYPE>CREDIT
+<DTPOSTED>20261123
+<TRNAMT>10.00
+<FITID>Z1
+<MEMO>PIX RECEBIDO
+</STMTTRN>
+</BANKTRANLIST>
+</STMTRS>
+</BANKMSGSRSV1>
+</OFX>`;
+    const result = parseOfxContent(ofx);
+    expect(result.statementBalance).toBe("220.50");
+    expect(result.statementBalanceAt).toBe("2026-11-23");
+  });
 });
 
 describe("parsePdfTextContent", () => {
@@ -75,6 +102,24 @@ describe("parsePdfTextContent", () => {
     );
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]?.description).toContain("SUPERMERCADO");
+  });
+
+  it("extrai saldo no dia da exportação", () => {
+    const result = parsePdfTextContent(
+      "Extrato C6\nSaldo no dia da exportação R$ 220,50\n02/10/2026 SUPERMERCADO XYZ 45,90",
+    );
+    expect(result.statementBalance).toBe("220.50");
+    expect(result.rows).toHaveLength(1);
+  });
+});
+
+describe("inferTypeFromSignedAmount ADJUSTMENT", () => {
+  it("mapeia ADJUSTMENT para INCOME/EXPENSE pelo sinal", async () => {
+    const { inferTypeFromSignedAmount } = await import(
+      "@/lib/imports/normalize"
+    );
+    expect(inferTypeFromSignedAmount("-10.00", "ADJUSTMENT")).toBe("EXPENSE");
+    expect(inferTypeFromSignedAmount("10.00", "ADJUSTMENT")).toBe("INCOME");
   });
 });
 

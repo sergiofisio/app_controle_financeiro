@@ -23,6 +23,25 @@ export function parseOfxContent(content: string): ParseResult {
     };
   }
 
+  let statementBalance: string | null = null;
+  let statementBalanceAt: string | null = null;
+  const ledgerBlock =
+    normalized.match(/<LEDGERBAL>[\s\S]*?(?:<\/LEDGERBAL>|<AVAILBAL>|<BANKTRANLIST>|<CCSTMTRS>|$)/i)?.[0] ??
+    "";
+  const balamt =
+    extractTag(ledgerBlock, "BALAMT") ||
+    extractTag(normalized, "BALAMT");
+  const dtasof =
+    extractTag(ledgerBlock, "DTASOF") ||
+    extractTag(normalized, "DTASOF");
+  if (balamt) {
+    const parsedBal = parseFlexibleAmount(balamt);
+    if (parsedBal) statementBalance = parsedBal.signed;
+  }
+  if (dtasof) {
+    statementBalanceAt = parseFlexibleDate(dtasof);
+  }
+
   const stmtBlocks = normalized.split(/<STMTTRN>/i).slice(1);
   const rows: NormalizedImportRow[] = [];
 
@@ -71,6 +90,8 @@ export function parseOfxContent(content: string): ParseResult {
   return {
     format: "OFX",
     rows,
+    statementBalance,
+    statementBalanceAt,
     warningMessage:
       rows.length === 0
         ? "Nenhuma transação STMTTRN encontrada no OFX."

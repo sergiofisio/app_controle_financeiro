@@ -445,23 +445,25 @@ model Transaction {
 }
 
 model ImportBatch {
-  id              String            @id @default(cuid())
-  householdId     String
-  accountId       String
-  format          ImportFormat
-  fileName        String
-  fileHash        String
-  status          ImportBatchStatus @default(PREVIEW)
-  rowCount        Int               @default(0)
-  importedCount   Int               @default(0)
-  duplicateCount  Int               @default(0)
-  rejectedCount   Int               @default(0)
-  mappingId       String?
-  warningMessage  String?
-  createdById     String
-  createdAt       DateTime          @default(now())
-  confirmedAt     DateTime?
-  revertedAt      DateTime?
+  id                 String            @id @default(cuid())
+  householdId        String
+  accountId          String
+  format             ImportFormat
+  fileName           String
+  fileHash           String
+  status             ImportBatchStatus @default(PREVIEW)
+  rowCount           Int               @default(0)
+  importedCount      Int               @default(0)
+  duplicateCount     Int               @default(0)
+  rejectedCount      Int               @default(0)
+  mappingId          String?
+  warningMessage     String?
+  statementBalance   Decimal?          @db.Decimal(18, 2)
+  statementBalanceAt DateTime?
+  createdById        String
+  createdAt          DateTime          @default(now())
+  confirmedAt        DateTime?
+  revertedAt         DateTime?
 
   household    Household         @relation(fields: [householdId], references: [id], onDelete: Restrict)
   account      FinancialAccount  @relation(fields: [accountId], references: [id], onDelete: Restrict)

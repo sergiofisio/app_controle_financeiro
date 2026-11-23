@@ -133,10 +133,16 @@ export function inferTypeFromSignedAmount(
   signedAmount: string | null,
   suggested: "INCOME" | "EXPENSE" | "TRANSFER" | "YIELD" | "ADJUSTMENT" | null,
 ): "INCOME" | "EXPENSE" | "TRANSFER" | "YIELD" | "ADJUSTMENT" {
-  if (suggested === "TRANSFER" || suggested === "YIELD" || suggested === "ADJUSTMENT") {
+  // TRANSFER/YIELD mantêm o tipo; ADJUSTMENT bancário vira INCOME/EXPENSE pelo sinal
+  // (cashEffect(ADJUSTMENT) soma o absoluto e distorce o saldo).
+  if (suggested === "TRANSFER" || suggested === "YIELD") {
     return suggested;
   }
-  if (!signedAmount) return suggested === "INCOME" ? "INCOME" : "EXPENSE";
+  if (!signedAmount) {
+    if (suggested === "INCOME") return "INCOME";
+    if (suggested === "ADJUSTMENT") return "INCOME";
+    return "EXPENSE";
+  }
   const n = toDecimal(signedAmount);
   if (n.isNegative()) return "EXPENSE";
   return "INCOME";

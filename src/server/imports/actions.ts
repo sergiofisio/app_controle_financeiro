@@ -13,11 +13,18 @@ import {
 } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  cashEffect,
+  parseBRLInput,
+  toDecimal,
+  type TxType as MoneyTxType,
+} from "@/lib/money";
+import {
   batchDescriptionMatchKey,
   buildCategorySuggestionMap,
   buildFingerprint,
   descriptionMatchKey,
   hashFileContent,
+  parseFlexibleDate,
   parseStatementFile,
 } from "@/lib/imports";
 import type { CsvColumnMap } from "@/features/imports/types";
@@ -255,6 +262,35 @@ export async function uploadStatementAction(formData: FormData) {
         ? ImportFormat.PDF
         : ImportFormat.CSV;
 
+  const statementBalanceRaw = String(
+    formData.get("statementBalance") || "",
+  ).trim();
+  let statementBalance: ReturnType<typeof parseBRLInput> | null = null;
+  if (statementBalanceRaw) {
+    try {
+      statementBalance = parseBRLInput(statementBalanceRaw);
+    } catch {
+      return { error: "Saldo do extrato inválido." };
+    }
+  } else if (parsed.statementBalance) {
+    try {
+      statementBalance = toDecimal(parsed.statementBalance);
+    } catch {
+      statementBalance = null;
+    }
+  }
+
+  const statementBalanceAtRaw = String(
+    formData.get("statementBalanceAt") || "",
+  ).trim();
+  let statementBalanceAt: Date | null = null;
+  if (statementBalanceAtRaw) {
+    const iso = parseFlexibleDate(statementBalanceAtRaw);
+    if (iso) statementBalanceAt = new Date(iso);
+  } else if (parsed.statementBalanceAt) {
+    statementBalanceAt = new Date(parsed.statementBalanceAt);
+  }
+
   const batch = await prisma.$transaction(async (tx) => {
     const created = await tx.importBatch.create({
       data: {
@@ -267,10 +303,15 @@ export async function uploadStatementAction(formData: FormData) {
         rowCount: rowCreates.length,
         duplicateCount,
         rejectedCount: 0,
+        statementBalance,
+        statementBalanceAt,
         warningMessage: [
           parsed.warningMessage,
           repeatedFile
             ? "Arquivo com mesmo conteúdo já foi enviado anteriormente."
+            : null,
+          !statementBalance
+            ? "Informe o saldo atual do extrato na prévia para alinhar a abertura da conta."
             : null,
         ]
           .filter(Boolean)
@@ -427,13 +468,105 @@ export async function categorizeImportGroupAction(formData: FormData) {
   return { ok: true, updated: ids.length };
 }
 
-export async function confirmImportBatchAction(batchId: string) {
+function resolveImportTxType(row: {
+  userType: TxType | null;
+  suggestedType: TxType | null;
+  signedAmount: { toString(): string } | null;
+}): TxType {
+  let type = (row.userType || row.suggestedType || TxType.EXPENSE) as TxType;
+  if (type === TxType.ADJUSTMENT) {
+    const signed = row.signedAmount ? toDecimal(row.signedAmount.toString()) : null;
+    type = signed && signed.isNegative() ? TxType.EXPENSE : TxType.INCOME;
+  }
+  return type;
+}
+
+export async function updateBatchStatementBalanceAction(formData: FormData) {
+  const { householdId } = await requireHouseholdContext();
+  const batchId = String(formData.get("batchId") || "");
+  const statementBalanceRaw = String(
+    formData.get("statementBalance") || "",
+  ).trim();
+  const statementBalanceAtRaw = String(
+    formData.get("statementBalanceAt") || "",
+  ).trim();
+
+  if (!batchId) return { error: "Lote inválido." };
+  if (!statementBalanceRaw) return { error: "Informe o saldo do extrato." };
+
+  let statementBalance;
+  try {
+    statementBalance = parseBRLInput(statementBalanceRaw);
+  } catch {
+    return { error: "Saldo do extrato inválido." };
+  }
+
+  let statementBalanceAt: Date | null = null;
+  if (statementBalanceAtRaw) {
+    const iso = parseFlexibleDate(statementBalanceAtRaw);
+    if (iso) statementBalanceAt = new Date(iso);
+  }
+
+  const updated = await prisma.importBatch.updateMany({
+    where: { id: batchId, householdId, status: "PREVIEW" },
+    data: {
+      statementBalance,
+      statementBalanceAt,
+    },
+  });
+  if (updated.count === 0) {
+    return { error: "Lote não encontrado ou já confirmado." };
+  }
+
+  revalidatePath(`/importar/${batchId}`);
+  return { ok: true };
+}
+
+export async function confirmImportBatchAction(formData: FormData | string) {
   const { householdId, userId } = await requireHouseholdContext();
+
+  const batchId =
+    typeof formData === "string"
+      ? formData
+      : String(formData.get("batchId") || "");
+  const statementOverride =
+    typeof formData === "string"
+      ? ""
+      : String(formData.get("statementBalance") || "").trim();
+
   const batch = await prisma.importBatch.findFirst({
     where: { id: batchId, householdId, status: "PREVIEW" },
     include: { rows: true, account: true },
   });
   if (!batch) return { error: "Lote não encontrado ou já confirmado." };
+
+  let statementBalance = batch.statementBalance
+    ? toDecimal(batch.statementBalance.toString())
+    : null;
+  if (statementOverride) {
+    try {
+      statementBalance = parseBRLInput(statementOverride);
+    } catch {
+      return { error: "Saldo do extrato inválido." };
+    }
+  }
+  if (!statementBalance) {
+    return {
+      error:
+        "Informe o saldo atual do extrato para confirmar e alinhar a abertura da conta.",
+    };
+  }
+
+  const statementBalanceAt =
+    batch.statementBalanceAt ??
+    (typeof formData !== "string" && formData.get("statementBalanceAt")
+      ? (() => {
+          const iso = parseFlexibleDate(
+            String(formData.get("statementBalanceAt")),
+          );
+          return iso ? new Date(iso) : null;
+        })()
+      : null);
 
   const toImport = batch.rows.filter(
     (r) =>
@@ -446,7 +579,7 @@ export async function confirmImportBatchAction(batchId: string) {
 
   const CHUNK = 200;
   const txCreates = toImport.map((row) => {
-    const type = (row.userType || row.suggestedType || TxType.EXPENSE) as TxType;
+    const type = resolveImportTxType(row);
     const description =
       row.userDescription || row.description || "Importado";
     const categoryId = row.userCategoryId || row.suggestedCategoryId;
@@ -491,7 +624,7 @@ export async function confirmImportBatchAction(batchId: string) {
       ruleCandidates.set(key, {
         pattern,
         categoryId,
-        txType: (row.userType || row.suggestedType || TxType.EXPENSE) as TxType,
+        txType: resolveImportTxType(row),
       });
     }
   }
@@ -542,6 +675,70 @@ export async function confirmImportBatchAction(batchId: string) {
           }
         }
 
+        const accountTxs = await tx.transaction.findMany({
+          where: {
+            householdId,
+            accountId: batch.accountId,
+            deletedAt: null,
+            status: { in: [TxStatus.CLEARED, TxStatus.PENDING] },
+          },
+          select: {
+            type: true,
+            amount: true,
+            movementDate: true,
+            transferGroup: {
+              select: { fromAccountId: true, toAccountId: true },
+            },
+          },
+        });
+
+        let sumEffects = toDecimal(0);
+        let minDate: Date | null = null;
+        for (const t of accountTxs) {
+          let transferDirection: "OUT" | "IN" | undefined;
+          if (t.type === TxType.TRANSFER && t.transferGroup) {
+            transferDirection =
+              t.transferGroup.fromAccountId === batch.accountId
+                ? "OUT"
+                : "IN";
+          } else if (t.type === TxType.TRANSFER) {
+            transferDirection = "OUT";
+          }
+          sumEffects = sumEffects.plus(
+            cashEffect(t.type as MoneyTxType, t.amount, {
+              transferDirection,
+            }),
+          );
+          if (!minDate || t.movementDate < minDate) {
+            minDate = t.movementDate;
+          }
+        }
+
+        const initialBalance = statementBalance.minus(sumEffects);
+        let initialBalanceDate: Date;
+        if (minDate) {
+          initialBalanceDate = new Date(
+            Date.UTC(
+              minDate.getUTCFullYear(),
+              minDate.getUTCMonth(),
+              minDate.getUTCDate() - 1,
+            ),
+          );
+        } else {
+          initialBalanceDate = statementBalanceAt ?? new Date();
+        }
+
+        await tx.financialAccount.update({
+          where: { id: batch.accountId },
+          data: {
+            initialBalance,
+            initialBalanceDate,
+            statedBalance: statementBalance,
+            statedBalanceAt: statementBalanceAt ?? new Date(),
+            lastReconciledAt: new Date(),
+          },
+        });
+
         const skipped = batch.rows.filter((r) => !r.include).length;
         await tx.importBatch.update({
           where: { id: batch.id },
@@ -550,6 +747,8 @@ export async function confirmImportBatchAction(batchId: string) {
             confirmedAt: new Date(),
             importedCount: toImport.length,
             rejectedCount: skipped,
+            statementBalance,
+            statementBalanceAt: statementBalanceAt ?? undefined,
           },
         });
       },

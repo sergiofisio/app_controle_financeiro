@@ -67,7 +67,31 @@ export function UploadForm({
           <Label htmlFor="delimiter">Delimitador CSV (opcional)</Label>
           <Input id="delimiter" name="delimiter" placeholder="; ou ," />
         </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="statementBalance">
+            Saldo atual no extrato (obrigatório para fechar o ciclo)
+          </Label>
+          <Input
+            id="statementBalance"
+            name="statementBalance"
+            placeholder="220,50"
+            inputMode="decimal"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="statementBalanceAt">Data do saldo do extrato</Label>
+          <Input
+            id="statementBalanceAt"
+            name="statementBalanceAt"
+            type="date"
+          />
+        </div>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Se o PDF/OFX trouxer o saldo, ele preenche automaticamente; você pode
+        sobrescrever aqui. Na confirmação o saldo inicial da conta é ajustado
+        para bater com esse valor.
+      </p>
 
       {headers ? (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
