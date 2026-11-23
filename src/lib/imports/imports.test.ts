@@ -3,6 +3,7 @@ import { parseCsvContent } from "@/lib/imports/parse-csv";
 import { parseOfxContent } from "@/lib/imports/parse-ofx";
 import { parsePdfTextContent } from "@/lib/imports/parse-pdf";
 import {
+  batchDescriptionMatchKey,
   buildCategorySuggestionMap,
   buildFingerprint,
   descriptionMatchKey,
@@ -123,6 +124,23 @@ describe("descriptionMatchKey", () => {
     expect(descriptionMatchKey("PIX ENVIADO")).toBeNull();
     expect(descriptionMatchKey("PIX")).toBeNull();
     expect(descriptionMatchKey("   ")).toBeNull();
+  });
+});
+
+describe("batchDescriptionMatchKey", () => {
+  it("agrupa merchants parecidos como descriptionMatchKey", () => {
+    expect(
+      batchDescriptionMatchKey("PADARIA E CONFEITARIA SAO BERNARDO LOJA 01"),
+    ).toBe(
+      batchDescriptionMatchKey("Padaria e Confeitaria Sao Bernardo Centro"),
+    );
+  });
+
+  it("agrupa textos genéricos idênticos no lote", () => {
+    const a = batchDescriptionMatchKey("TRANSF ENVIADA PIX");
+    const b = batchDescriptionMatchKey("transf enviada pix");
+    expect(a).toBe("TRANSF ENVIADA PIX");
+    expect(a).toBe(b);
   });
 });
 

@@ -13,6 +13,7 @@ import {
 } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  batchDescriptionMatchKey,
   buildCategorySuggestionMap,
   buildFingerprint,
   descriptionMatchKey,
@@ -321,8 +322,51 @@ export async function updateImportRowAction(formData: FormData) {
     },
   });
 
+  let propagated = 0;
+  if (userCategoryId) {
+    const sourceText =
+      userDescription || row.userDescription || row.description;
+    const sourceKey = batchDescriptionMatchKey(sourceText);
+    if (sourceKey) {
+      const siblings = await prisma.importRow.findMany({
+        where: {
+          batchId: row.batchId,
+          id: { not: rowId },
+          status: { not: ImportRowStatus.DUPLICATE },
+          userCategoryId: null,
+        },
+        select: {
+          id: true,
+          description: true,
+          userDescription: true,
+        },
+      });
+      const siblingIds = siblings
+        .filter(
+          (sibling) =>
+            batchDescriptionMatchKey(
+              sibling.userDescription || sibling.description,
+            ) === sourceKey,
+        )
+        .map((sibling) => sibling.id);
+
+      if (siblingIds.length > 0) {
+        const result = await prisma.importRow.updateMany({
+          where: { id: { in: siblingIds } },
+          data: {
+            userCategoryId,
+            classificationState: ClassificationState.CONFIRMED,
+            status: ImportRowStatus.READY,
+            ...(userType ? { userType: userType as TxType } : {}),
+          },
+        });
+        propagated = result.count;
+      }
+    }
+  }
+
   revalidatePath(`/importar/${row.batchId}`);
-  return { ok: true };
+  return { ok: true, propagated };
 }
 
 export async function confirmImportBatchAction(batchId: string) {

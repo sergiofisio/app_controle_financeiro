@@ -102,6 +102,20 @@ export function descriptionMatchKey(
   return key;
 }
 
+/**
+ * Chave para propagação explícita dentro do mesmo lote de importação.
+ * Usa o match de merchant quando disponível; senão o texto normalizado
+ * (permite agrupar "TRANSF ENVIADA PIX" idênticas após escolha do usuário).
+ */
+export function batchDescriptionMatchKey(
+  description: string | null | undefined,
+): string | null {
+  const merchantKey = descriptionMatchKey(description);
+  if (merchantKey) return merchantKey;
+  const folded = foldDescription(description);
+  return folded || null;
+}
+
 export type CategorySuggestion = {
   categoryId: string;
   txType: string | null;

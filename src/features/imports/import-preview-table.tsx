@@ -155,8 +155,26 @@ export function ImportPreviewTable({
                         fd.set("rowId", row.id);
                         fd.set("userCategoryId", e.target.value);
                         fd.set("include", String(row.include));
+                        if (row.userType || row.suggestedType) {
+                          fd.set(
+                            "userType",
+                            row.userType || row.suggestedType || "",
+                          );
+                        }
                         startTransition(async () => {
-                          await updateImportRowAction(fd);
+                          const r = await updateImportRowAction(fd);
+                          if (r?.error) {
+                            toast.error(r.error);
+                            return;
+                          }
+                          const propagated =
+                            r && "propagated" in r ? (r.propagated ?? 0) : 0;
+                          if (propagated > 0) {
+                            toast.success(
+                              `Categoria aplicada a ${propagated} linha(s) similar(es).`,
+                            );
+                          }
+                          router.refresh();
                         });
                       }}
                     >
