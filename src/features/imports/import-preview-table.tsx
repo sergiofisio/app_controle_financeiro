@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
+  categorizeImportGroupAction,
   confirmImportBatchAction,
   revertImportBatchAction,
   updateImportRowAction,
@@ -53,6 +54,8 @@ type DescriptionGroup = {
   label: string;
   total: number;
   withoutCategory: number;
+  categoryId: string | null;
+  suggestedType: string | null;
 };
 
 export function ImportPreviewTable({
@@ -91,30 +94,103 @@ export function ImportPreviewTable({
   );
 
   const descriptionGroups = useMemo(() => {
-    const map = new Map<string, DescriptionGroup>();
+    const map = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        total: number;
+        withoutCategory: number;
+        categoryIds: Set<string>;
+        suggestedType: string | null;
+      }
+    >();
+
     for (const row of activeRows) {
       const text = rowText(row) || "(sem descrição)";
       const key = batchDescriptionMatchKey(text) || text.toUpperCase();
+      const categoryId = row.userCategoryId || row.suggestedCategoryId;
       const current = map.get(key);
       if (current) {
         current.total += 1;
         if (!hasCategory(row)) current.withoutCategory += 1;
+        if (categoryId) current.categoryIds.add(categoryId);
+        if (!current.suggestedType && (row.userType || row.suggestedType)) {
+          current.suggestedType = row.userType || row.suggestedType;
+        }
       } else {
         map.set(key, {
           key,
           label: text,
           total: 1,
           withoutCategory: hasCategory(row) ? 0 : 1,
+          categoryIds: new Set(categoryId ? [categoryId] : []),
+          suggestedType: row.userType || row.suggestedType,
         });
       }
     }
-    return [...map.values()].sort((a, b) => {
-      if (b.withoutCategory !== a.withoutCategory) {
-        return b.withoutCategory - a.withoutCategory;
-      }
-      return b.total - a.total;
-    });
+
+    return [...map.values()]
+      .map(
+        (group): DescriptionGroup => ({
+          key: group.key,
+          label: group.label,
+          total: group.total,
+          withoutCategory: group.withoutCategory,
+          suggestedType: group.suggestedType,
+          categoryId:
+            group.categoryIds.size === 1 ? [...group.categoryIds][0]! : null,
+        }),
+      )
+      .sort((a, b) => {
+        if (b.withoutCategory !== a.withoutCategory) {
+          return b.withoutCategory - a.withoutCategory;
+        }
+        return b.total - a.total;
+      });
   }, [activeRows]);
+
+  function applyCategoryToGroup(
+    group: DescriptionGroup,
+    userCategoryId: string,
+  ) {
+    setDraftRows((prev) =>
+      prev.map((row) => {
+        if (!row.include || row.status === "DUPLICATE") return row;
+        const text = rowText(row) || "(sem descrição)";
+        const key = batchDescriptionMatchKey(text) || text.toUpperCase();
+        if (key !== group.key) return row;
+        return {
+          ...row,
+          userCategoryId: userCategoryId || null,
+          classificationState: userCategoryId ? "CONFIRMED" : "UNKNOWN",
+          status: row.status === "DUPLICATE" ? row.status : "READY",
+          userType: row.userType || group.suggestedType || row.suggestedType,
+        };
+      }),
+    );
+
+    const fd = new FormData();
+    fd.set("batchId", batchId);
+    fd.set("matchKey", group.key);
+    fd.set("userCategoryId", userCategoryId);
+    if (group.suggestedType) fd.set("userType", group.suggestedType);
+
+    startTransition(async () => {
+      const result = await categorizeImportGroupAction(fd);
+      if (result?.error) {
+        toast.error(result.error);
+        setDraftRows(rows);
+        return;
+      }
+      const updated =
+        result && "updated" in result ? (result.updated ?? 0) : 0;
+      if (updated > 0 && userCategoryId) {
+        toast.success(`Categoria aplicada a ${updated} linha(s).`);
+      }
+      router.refresh();
+    });
+  }
 
   const visibleRows = useMemo(() => {
     return draftRows.filter((row) => {
@@ -165,13 +241,14 @@ export function ImportPreviewTable({
           </div>
         </div>
 
-        <div className="max-h-56 overflow-y-auto rounded-lg border">
+        <div className="max-h-72 overflow-y-auto rounded-lg border">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Descrição</TableHead>
-                <TableHead className="text-right w-20">Qtd</TableHead>
-                <TableHead className="text-right w-28">Sem categoria</TableHead>
+                <TableHead className="text-right w-16">Qtd</TableHead>
+                <TableHead className="text-right w-24">Sem cat.</TableHead>
+                {editable ? <TableHead className="w-52">Categoria</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -180,22 +257,39 @@ export function ImportPreviewTable({
                   key={group.key}
                   className={
                     filterKey === group.key
-                      ? "bg-muted/50 cursor-pointer"
-                      : "cursor-pointer hover:bg-muted/30"
-                  }
-                  onClick={() =>
-                    setFilterKey((prev) =>
-                      prev === group.key ? null : group.key,
-                    )
+                      ? "bg-muted/50"
+                      : "hover:bg-muted/30"
                   }
                 >
-                  <TableCell className="max-w-[420px] truncate text-sm">
+                  <TableCell
+                    className="max-w-[320px] truncate text-sm cursor-pointer"
+                    title={group.label}
+                    onClick={() =>
+                      setFilterKey((prev) =>
+                        prev === group.key ? null : group.key,
+                      )
+                    }
+                  >
                     {group.label}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">
+                  <TableCell
+                    className="text-right tabular-nums text-sm cursor-pointer"
+                    onClick={() =>
+                      setFilterKey((prev) =>
+                        prev === group.key ? null : group.key,
+                      )
+                    }
+                  >
                     {group.total}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums text-sm">
+                  <TableCell
+                    className="text-right tabular-nums text-sm cursor-pointer"
+                    onClick={() =>
+                      setFilterKey((prev) =>
+                        prev === group.key ? null : group.key,
+                      )
+                    }
+                  >
                     {group.withoutCategory > 0 ? (
                       <span className="text-amber-700 dark:text-amber-300">
                         {group.withoutCategory}
@@ -204,6 +298,26 @@ export function ImportPreviewTable({
                       <span className="text-muted-foreground">0</span>
                     )}
                   </TableCell>
+                  {editable ? (
+                    <TableCell>
+                      <select
+                        className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm"
+                        value={group.categoryId || ""}
+                        disabled={pending}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) =>
+                          applyCategoryToGroup(group, e.target.value)
+                        }
+                      >
+                        <option value="">Sem categoria</option>
+                        {categories.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </TableCell>
+                  ) : null}
                 </TableRow>
               ))}
             </TableBody>
@@ -265,7 +379,7 @@ export function ImportPreviewTable({
                 <TableCell className="whitespace-nowrap">
                   {row.movementDate ? formatDate(row.movementDate) : "—"}
                 </TableCell>
-                <TableCell className="min-w-[220px]">
+                <TableCell className="min-w-55">
                   {editable ? (
                     <Input
                       value={row.userDescription || row.description || ""}

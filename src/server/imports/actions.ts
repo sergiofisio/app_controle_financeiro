@@ -369,6 +369,64 @@ export async function updateImportRowAction(formData: FormData) {
   return { ok: true, propagated };
 }
 
+export async function categorizeImportGroupAction(formData: FormData) {
+  const { householdId } = await requireHouseholdContext();
+  const batchId = String(formData.get("batchId") || "");
+  const matchKey = String(formData.get("matchKey") || "");
+  const userCategoryId = String(formData.get("userCategoryId") || "") || null;
+  const userType = String(formData.get("userType") || "") || null;
+
+  if (!batchId || !matchKey) {
+    return { error: "Grupo inválido." };
+  }
+
+  const batch = await prisma.importBatch.findFirst({
+    where: { id: batchId, householdId, status: "PREVIEW" },
+    select: { id: true },
+  });
+  if (!batch) return { error: "Lote não encontrado ou já confirmado." };
+
+  const candidates = await prisma.importRow.findMany({
+    where: {
+      batchId,
+      status: { not: ImportRowStatus.DUPLICATE },
+      include: true,
+    },
+    select: {
+      id: true,
+      description: true,
+      userDescription: true,
+    },
+  });
+
+  const ids = candidates
+    .filter((row) => {
+      const text = row.userDescription || row.description || "(sem descrição)";
+      const key = batchDescriptionMatchKey(text) || text.toUpperCase();
+      return key === matchKey;
+    })
+    .map((row) => row.id);
+
+  if (ids.length === 0) {
+    return { error: "Nenhuma linha encontrada para este grupo." };
+  }
+
+  await prisma.importRow.updateMany({
+    where: { id: { in: ids } },
+    data: {
+      userCategoryId,
+      classificationState: userCategoryId
+        ? ClassificationState.CONFIRMED
+        : ClassificationState.UNKNOWN,
+      status: ImportRowStatus.READY,
+      ...(userType ? { userType: userType as TxType } : {}),
+    },
+  });
+
+  revalidatePath(`/importar/${batchId}`);
+  return { ok: true, updated: ids.length };
+}
+
 export async function confirmImportBatchAction(batchId: string) {
   const { householdId, userId } = await requireHouseholdContext();
   const batch = await prisma.importBatch.findFirst({
